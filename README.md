@@ -1,125 +1,129 @@
 # Parking Management System
 
-## 1. Project Overview
+A Python-based desktop application developed as a college project with a focus on **Total Quality Management (TQM)**. The application provides a graphical interface for managing parking spaces and related parking operations.
 
-The Parking Management System is a Python-based desktop application developed as a college project for Fundamentals of Total Quality Management (TQM). It manages parking slots, vehicle entry and exit, user accounts, and parking availability, with a focus on security and data accuracy.
+## 📸 Screenshots
 
-## 2. Project Objectives
+### Login Screen
+![Parking Management System Login Screen](screenshots/login.png)
 
-- Manage parking slots efficiently.
-- Track vehicle entry and exit.
-- Improve application security.
-- Prevent invalid and duplicate entries.
-- Record important user activities.
-- Provide role-based access to application features.
+### Dashboard
+![Parking Management System Dashboard](screenshots/dashboard.png)
 
-## 3. Features
+### Parking Slots
+![Parking Slot Status View](screenshots/parking-slots.png)
 
-### User Authentication
-- Login with a username and password.
-- Role-based access for Admin, Staff, and User.
-- Self-registration for new users.
-- Password hashing.
-- Password reset by Admin.
+## 🎯 Project Objectives
 
-### Parking Management
-- 50 fixed parking slots.
-- Available, Occupied, and Unavailable statuses.
-- Parking availability displayed on the dashboard.
-- Authorized users can manage parking availability.
+- Develop a desktop application for parking management.
+- Provide a graphical user interface for parking-related operations.
+- Organize parking slot information and availability.
+- Apply software quality principles to improve reliability, usability, and security.
+- Support better monitoring and management of parking spaces.
 
-### Vehicle Management
-- Record vehicle entry and exit.
-- Assign available parking slots.
-- Validate vehicle details.
-- Prevent duplicate active parking entries.
+## 🛠️ Technologies Used
 
-### User Management and Notifications
-- Admin can manage user accounts.
-- New self-registrations generate notifications for Admin.
-- Access depends on the user's role.
+- **Python** — Application development
+- **Tkinter** — Graphical user interface
+- **SQLite** — Database management
+- **Git and GitHub** — Version control and project hosting
+- **PyInstaller** — Packaging the application for Windows
 
-### Audit Trail
-- Record important activities such as login and account changes.
-- Display user IDs, usernames, roles, actions, and timestamps.
-- Filter audit records by date.
-- Admin-only audit-log deletion.
+## ✨ Main Modules
 
-### Input Validation
-- Validate usernames and passwords.
-- Check required fields.
-- Validate vehicle registration numbers.
-- Prevent invalid parking operations.
+The project is designed around the following modules:
 
-## 4. User Roles
+- **Login System:** User login interface.
+- **Dashboard:** Main interface for accessing application functions.
+- **Parking Slot Management:** View and manage parking slot availability and status.
+- **Vehicle Management:** Support for parking-related vehicle operations.
+- **Database:** Store application data using SQLite.
+- **Quality and Security:** Apply input validation and appropriate account-protection and activity-logging measures where implemented.
 
-| Role | Responsibilities |
-|---|---|
-| Admin | Manage users, view notifications, access audit logs, and manage application functions. |
-| Staff | Handle parking operations and manage parking availability as permitted. |
-| User | Use the parking and vehicle entry/exit functions permitted by the application. |
+*Note: The availability of individual functions depends on the current implementation of the application.*
 
-## 5. Technologies Used
-
-- Python
-- Tkinter and ttk
-- SQLite
-- Git and GitHub
-
-## 6. Project Structure
+## 📂 Project Structure
 
 ```text
 Parking-Management-System/
+│
 ├── main.py
 ├── database.py
+├── requirements.txt
+├── README.md
 ├── .gitignore
-└── README.md
+└── screenshots/
+    ├── login.png
+    ├── dashboard.png
+    └── parking-slots.png
 ```
 
-The local `parking.db` database is excluded from Git tracking.
+## 🚀 How to Run the Application
 
-## 7. Requirements
+### Option 1: Run the packaged Windows application
 
-- Python 3.x
-- Tkinter support
-- Git (for version control)
+1. Download `ParkingManagementSystem.zip` from the provided project distribution.
+2. Extract the ZIP file.
+3. Open the extracted folder.
+4. Double-click `ParkingManagementSystem.exe`.
 
-## 8. Run the Application
+Keep the database file and other packaged application files in their expected locations.
 
-1. Install Python 3.x.
-2. Download or clone this repository.
-3. Open a terminal in the project folder.
-4. Run:
+### Option 2: Run from the source code
+
+**Requirements:** Python installed on your computer.
+
+1. Clone the repository:
+
+   ```bash
+   git clone https://github.com/Kosto17/Parking-Management-System.git
+   ```
+
+2. Open the project folder:
+
+   ```bash
+   cd Parking-Management-System
+   ```
+
+3. Run the application:
+
+   ```bash
+   python main.py
+   ```
+
+If the application requires any additional packages, install them using the provided requirements file:
 
 ```bash
-python main.py
+pip install -r requirements.txt
 ```
 
-The application uses SQLite for local database storage.
+## 📊 Total Quality Management (TQM) Focus
 
-## 9. Security and Quality Focus
+This project is developed as part of an academic study of software quality.
 
-This project focuses on the TQM quality goal of improving security. Security-related measures include role-based access, password hashing, input validation, audit logging, and account management.
+The main quality considerations include:
 
-Password hashing is different from reversible encryption. Any additional encryption requirement should be verified separately.
+- **Security:** Protecting access to the application.      
+- **Reliability:** Keeping parking information organized.
+- **Usability:** Providing a clear and understandable interface.
+- **Validation:** Reducing invalid input.
+- **Maintainability:** Keeping the application code organized.
+- **Testing:** Checking application functions and correcting errors.
 
-## 10. TQM Tools
+## 🔮 Future Improvements
 
-The project can be documented and evaluated using:
+- Improve the user interface and user experience.
+- Expand parking activity reports.
+- Strengthen security and account-management features.
+- Improve automated testing and error handling.
+- Add further reporting and monitoring capabilities.
 
-- FMEA and Risk Priority Number (RPN)
-- SIPOC analysis
-- Critical to Quality (CTQ) Tree
-- Defect logging
-- Pareto analysis
-- Fishbone diagram
-- Checksheet
-- PDCA cycle
+## 🎓 Academic Project
 
-## 11. Project Status
+**Project Name:** Parking Management System  
+**Domain:** Computer Science and Engineering  
+**Subject Focus:** Total Quality Management (TQM)
 
-The application is under development. Further testing and verification are required to confirm that all features work correctly together.
+---
 
-## 12. Repository
-
-https://github.com/Kosto17/Parking-Management-System
+Developed as an academic project to explore parking management and software quality principles.
