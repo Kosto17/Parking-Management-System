@@ -1,0 +1,2 @@
+# This project uses Python standard-library modules only.
+# Tkinter and SQLite are included with Python. No pip packages are required.
