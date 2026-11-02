@@ -54,7 +54,8 @@ def setup_database():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             username TEXT UNIQUE NOT NULL,
             password TEXT NOT NULL,
-            role TEXT NOT NULL
+            role TEXT NOT NULL,
+            display_name TEXT NOT NULL DEFAULT ''
         )
     """)
 
@@ -74,9 +75,27 @@ def setup_database():
             vehicle_type TEXT NOT NULL,
             slot_number INTEGER NOT NULL,
             entry_time TEXT NOT NULL,
-            exit_time TEXT
+            exit_time TEXT,
+            owner_phone TEXT NOT NULL DEFAULT ''
         )
     """)
+
+    cursor.execute("PRAGMA table_info(users)")
+    user_columns = {row[1] for row in cursor.fetchall()}
+    if "display_name" not in user_columns:
+        cursor.execute(
+            "ALTER TABLE users ADD COLUMN display_name TEXT NOT NULL DEFAULT ''"
+        )
+    cursor.execute(
+        "UPDATE users SET display_name=username WHERE display_name=''"
+    )
+
+    cursor.execute("PRAGMA table_info(vehicles)")
+    vehicle_columns = {row[1] for row in cursor.fetchall()}
+    if "owner_phone" not in vehicle_columns:
+        cursor.execute(
+            "ALTER TABLE vehicles ADD COLUMN owner_phone TEXT NOT NULL DEFAULT ''"
+        )
 
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS audit_logs (
@@ -140,8 +159,11 @@ def setup_database():
 
     if admin_row is None:
         cursor.execute(
-            "INSERT INTO users (username, password, role) VALUES (?, ?, ?)",
-            ("admin", hash_password("admin123"), "Admin")
+            """
+            INSERT INTO users (username, password, role, display_name)
+            VALUES (?, ?, ?, ?)
+            """,
+            ("admin", hash_password("admin123"), "Admin", "admin")
         )
     else:
         # Always keep the admin role as Admin.
@@ -381,6 +403,54 @@ def validate_owner_name(owner_name):
     return True, ""
 
 
+def validate_owner_phone(owner_phone):
+    digits = re.sub(r"\D", "", owner_phone)
+    if (not re.fullmatch(r"\+?[0-9][0-9 ()-]*", owner_phone)
+            or not 7 <= len(digits) <= 15):
+        return False, "Enter a valid phone number containing 7-15 digits."
+    return True, ""
+
+
+def validate_display_name(display_name):
+    if (not display_name or len(display_name) > 50
+            or not any(character.isalnum() for character in display_name)
+            or any(ord(character) < 32 for character in display_name)):
+        return False, "Display name must be 1-50 characters and contain a letter or number."
+    return True, ""
+
+
+def audit_date_range(name, now=None, from_date=None, to_date=None):
+    """Return audit bounds as a half-open range so display and deletion agree."""
+    now = now or datetime.now()
+    today = now.replace(hour=0, minute=0, second=0, microsecond=0)
+
+    if name == "Custom Range":
+        start = datetime.strptime(from_date or "", "%Y-%m-%d")
+        end_day = datetime.strptime(to_date or "", "%Y-%m-%d")
+        if end_day < start:
+            raise ValueError("The To date cannot be earlier than the From date.")
+        return start, end_day + timedelta(days=1)
+    if name == "Today":
+        return today, today + timedelta(days=1)
+    if name == "Yesterday":
+        return today - timedelta(days=1), today
+    if name == "This Week":
+        start = today - timedelta(days=today.weekday())
+        return start, start + timedelta(days=7)
+    if name == "This Month":
+        if today.month == 12:
+            end = today.replace(year=today.year + 1, month=1, day=1)
+        else:
+            end = today.replace(month=today.month + 1, day=1)
+        return today.replace(day=1), end
+    if name == "This Year":
+        return (
+            today.replace(month=1, day=1),
+            today.replace(year=today.year + 1, month=1, day=1)
+        )
+    return None, None
+
+
 # ============================================================
 # MAIN APPLICATION
 # ============================================================
@@ -398,6 +468,11 @@ class ParkingApp:
 
         self.username = None
         self.role = None
+        self.display_name = None
+        self.current_page = None
+        self.page_history = []
+        self.restoring_page = False
+        self.login_in_progress = False
 
         self.colors = {
             "Available": "#dcfce7",
@@ -531,11 +606,21 @@ class ParkingApp:
         frame = ttk.Frame(parent, style="App.TFrame")
         frame.pack(fill="x", padx=28, pady=(25, 15))
 
+        title_row = ttk.Frame(frame, style="App.TFrame")
+        title_row.pack(fill="x")
+
         ttk.Label(
-            frame,
+            title_row,
             text=title,
             style="Title.TLabel"
-        ).pack(anchor="w")
+        ).pack(side="left", anchor="w")
+
+        if self.current_page and self.current_page[0] != "home":
+            self.make_button(
+                title_row,
+                "← Back",
+                self.go_back
+            ).pack(side="right")
 
         if subtitle:
             ttk.Label(
@@ -545,6 +630,41 @@ class ParkingApp:
             ).pack(anchor="w", pady=(4, 0))
 
         return frame
+
+    def begin_page(self, page_name, *args):
+        page = (page_name, args)
+        if self.restoring_page:
+            self.current_page = page
+            self.restoring_page = False
+            return
+        if self.current_page and self.current_page != page:
+            self.page_history.append(self.current_page)
+        self.current_page = page
+
+    def go_back(self):
+        if self.page_history:
+            page_name, args = self.page_history.pop()
+        else:
+            page_name, args = "home", ()
+
+        routes = {
+            "home": self.show_home,
+            "parking_layout": self.show_parking_layout,
+            "manage_availability": self.show_manage_availability,
+            "vehicle_entry": self.show_vehicle_entry,
+            "vehicles": self.show_vehicles,
+            "vehicle_exit": self.show_vehicle_exit,
+            "notifications": self.show_notifications,
+            "user_management": self.show_user_management,
+            "reset_password": self.show_reset_password,
+            "audit_logs": self.show_audit_logs,
+            "profile": self.show_profile,
+        }
+        self.restoring_page = True
+        try:
+            routes.get(page_name, self.show_home)(*args)
+        finally:
+            self.restoring_page = False
 
     def make_card(self, parent, padding=18):
         outer = tk.Frame(
@@ -610,6 +730,9 @@ class ParkingApp:
     def show_login(self):
         self.clear_root()
         self.root.title("Parking Management System - Login")
+        self.current_page = None
+        self.page_history.clear()
+        self.restoring_page = False
 
         main = tk.Frame(self.root, bg=APP_BG)
         main.pack(fill="both", expand=True)
@@ -663,8 +786,19 @@ class ParkingApp:
             font=("Segoe UI", 10, "bold")
         ).pack(anchor="w")
 
-        self.login_password = ttk.Entry(form, show="*")
-        self.login_password.pack(fill="x", pady=(5, 20))
+        password_row = tk.Frame(form, bg=CARD_BG)
+        password_row.pack(fill="x", pady=(5, 20))
+        self.login_password = ttk.Entry(password_row, show="*")
+        self.login_password.pack(side="left", fill="x", expand=True)
+        show_password = tk.BooleanVar(value=False)
+        ttk.Checkbutton(
+            password_row,
+            text="Show",
+            variable=show_password,
+            command=lambda: self.login_password.configure(
+                show="" if show_password.get() else "*"
+            )
+        ).pack(side="left", padx=(8, 0))
 
         self.make_button(
             form,
@@ -689,7 +823,14 @@ class ParkingApp:
         ).pack(side="bottom", pady=22)
 
         self.login_username.focus_set()
-        self.login_password.bind("<Return>", lambda event: self.login())
+        self.login_username.bind(
+            "<Return>",
+            lambda event: (self.login_password.focus_set(), "break")[1]
+        )
+        self.login_password.bind(
+            "<Return>",
+            lambda event: (self.login(), "break")[1]
+        )
 
     def show_register(self):
         """Show self-registration. Every self-created account is a User."""
@@ -808,13 +949,14 @@ class ParkingApp:
                 cursor.execute(
                     """
                     INSERT INTO users
-                    (username, password, role)
-                    VALUES (?, ?, ?)
+                    (username, password, role, display_name)
+                    VALUES (?, ?, ?, ?)
                     """,
                     (
                         username,
                         hash_password(password),
-                        "User"
+                        "User",
+                        username
                     )
                 )
                 conn.commit()
@@ -865,6 +1007,16 @@ class ParkingApp:
         username_entry.focus_set()
 
     def login(self):
+        if self.login_in_progress:
+            return "break"
+        self.login_in_progress = True
+        try:
+            self._login_user()
+        finally:
+            self.login_in_progress = False
+        return "break"
+
+    def _login_user(self):
         username = self.login_username.get().strip()
         password = self.login_password.get()
 
@@ -880,7 +1032,7 @@ class ParkingApp:
 
         cursor.execute(
             """
-            SELECT username, password, role
+            SELECT username, password, role, display_name
             FROM users
             WHERE username=?
             """,
@@ -926,6 +1078,7 @@ class ParkingApp:
 
         self.username = user["username"]
         self.role = user["role"]
+        self.display_name = user["display_name"] or user["username"]
 
         create_audit_log(
             self.username,
@@ -941,6 +1094,9 @@ class ParkingApp:
     def show_dashboard(self):
         self.clear_root()
         self.root.title("Parking Management System")
+        self.current_page = None
+        self.page_history.clear()
+        self.restoring_page = False
 
         main = tk.Frame(self.root, bg=APP_BG)
         main.pack(fill="both", expand=True)
@@ -997,17 +1153,24 @@ class ParkingApp:
             anchor="w"
         ).pack(anchor="w")
 
-        tk.Label(
+        self.current_user_label = tk.Label(
             self.sidebar,
-            text=f"{self.username}  •  {self.role}",
+            text=f"{self.display_name or self.username}  •  {self.role}",
             bg="#1f2937",
             fg="#d1d5db",
             font=("Segoe UI", 9),
             anchor="w",
             padx=12
-        ).pack(fill="x", padx=15, pady=(0, 20), ipady=9)
+        )
+        self.current_user_label.pack(
+            fill="x",
+            padx=15,
+            pady=(0, 20),
+            ipady=9
+        )
 
         self.sidebar_button("Dashboard", self.show_home)
+        self.sidebar_button("My Profile", self.show_profile)
         self.sidebar_button("Parking Slots", self.show_parking_layout)
         self.sidebar_button("Vehicle Entry", self.show_vehicle_entry)
         self.sidebar_button("View Vehicles", self.show_vehicles)
@@ -1079,6 +1242,7 @@ class ParkingApp:
 
         self.username = None
         self.role = None
+        self.display_name = None
         self.show_login()
 
     # --------------------------------------------------------
@@ -1086,12 +1250,14 @@ class ParkingApp:
     # --------------------------------------------------------
 
     def show_home(self):
+        self.begin_page("home")
         self.clear_content()
 
         self.add_header(
             self.content_area,
             "Dashboard",
-            f"Welcome back, {self.username}. You are logged in as {self.role}."
+            f"Welcome back, {self.display_name or self.username}. "
+            f"You are logged in as {self.role}."
         )
 
         counts = self.get_slot_counts()
@@ -1304,6 +1470,7 @@ class ParkingApp:
     # --------------------------------------------------------
 
     def show_parking_layout(self):
+        self.begin_page("parking_layout")
         self.clear_content()
 
         content = self.create_scrollable_page(
@@ -1487,6 +1654,7 @@ class ParkingApp:
     # --------------------------------------------------------
 
     def show_manage_availability(self):
+        self.begin_page("manage_availability")
         self.clear_content()
 
         content = self.create_scrollable_page(
@@ -1763,6 +1931,7 @@ class ParkingApp:
     # --------------------------------------------------------
 
     def show_vehicle_entry(self):
+        self.begin_page("vehicle_entry")
         self.clear_content()
 
         content = self.create_scrollable_page(
@@ -1826,7 +1995,17 @@ class ParkingApp:
             pady=(0, 12)
         )
 
-        field("Vehicle Type", 4)
+        field("Owner Phone Number", 4)
+        phone_entry = ttk.Entry(form)
+        phone_entry.grid(
+            row=5,
+            column=0,
+            sticky="ew",
+            padx=(0, 25),
+            pady=(0, 12)
+        )
+
+        field("Vehicle Type", 6)
         type_var = tk.StringVar(value="Car")
         type_combo = ttk.Combobox(
             form,
@@ -1835,14 +2014,14 @@ class ParkingApp:
             state="readonly"
         )
         type_combo.grid(
-            row=5,
+            row=7,
             column=0,
             sticky="ew",
             padx=(0, 25),
             pady=(0, 12)
         )
 
-        field("Parking Slot", 6)
+        field("Parking Slot", 8)
 
         available = self.get_available_slots()
         slot_var = tk.StringVar()
@@ -1859,7 +2038,7 @@ class ParkingApp:
             state="readonly"
         )
         slot_combo.grid(
-            row=7,
+            row=9,
             column=0,
             sticky="ew",
             padx=(0, 25),
@@ -1875,6 +2054,7 @@ class ParkingApp:
         def save_entry():
             vehicle_number = vehicle_entry.get().strip().upper().replace(" ", "")
             owner_name = owner_entry.get().strip()
+            owner_phone = phone_entry.get().strip()
             vehicle_type = type_var.get()
 
             valid, error = validate_vehicle_number(
@@ -1887,6 +2067,11 @@ class ParkingApp:
             valid, error = validate_owner_name(owner_name)
             if not valid:
                 messagebox.showerror("Invalid Owner Name", error)
+                return
+
+            valid, error = validate_owner_phone(owner_phone)
+            if not valid:
+                messagebox.showerror("Invalid Owner Phone Number", error)
                 return
 
             if vehicle_type not in (
@@ -1971,16 +2156,18 @@ class ParkingApp:
                     vehicle_number,
                     owner_name,
                     vehicle_type,
+                    owner_phone,
                     slot_number,
                     entry_time,
                     exit_time
                 )
-                VALUES (?, ?, ?, ?, ?, NULL)
+                VALUES (?, ?, ?, ?, ?, ?, NULL)
                 """,
                 (
                     vehicle_number,
                     owner_name,
                     vehicle_type,
+                    owner_phone,
                     slot_number,
                     entry_time
                 )
@@ -2022,6 +2209,7 @@ class ParkingApp:
     # --------------------------------------------------------
 
     def show_vehicles(self):
+        self.begin_page("vehicles")
         self.clear_content()
 
         content = self.create_scrollable_page(
@@ -2055,6 +2243,7 @@ class ParkingApp:
             "id",
             "vehicle",
             "owner",
+            "phone",
             "type",
             "slot",
             "entry",
@@ -2072,6 +2261,7 @@ class ParkingApp:
             "id": "ID",
             "vehicle": "Vehicle Number",
             "owner": "Owner",
+            "phone": "Owner Phone",
             "type": "Type",
             "slot": "Slot",
             "entry": "Entry Time",
@@ -2082,6 +2272,7 @@ class ParkingApp:
             "id": 55,
             "vehicle": 130,
             "owner": 150,
+            "phone": 130,
             "type": 90,
             "slot": 70,
             "entry": 150,
@@ -2119,6 +2310,7 @@ class ParkingApp:
                 vehicle_number,
                 owner_name,
                 vehicle_type,
+                owner_phone,
                 slot_number,
                 entry_time,
                 exit_time
@@ -2138,6 +2330,7 @@ class ParkingApp:
                     row["id"],
                     row["vehicle_number"],
                     row["owner_name"],
+                    row["owner_phone"] or "-",
                     row["vehicle_type"],
                     f"Slot {row['slot_number']}",
                     row["entry_time"],
@@ -2150,6 +2343,7 @@ class ParkingApp:
     # --------------------------------------------------------
 
     def show_vehicle_exit(self):
+        self.begin_page("vehicle_exit")
         self.clear_content()
 
         content = self.create_scrollable_page(
@@ -2180,6 +2374,7 @@ class ParkingApp:
                 vehicle_number,
                 owner_name,
                 vehicle_type,
+                owner_phone,
                 slot_number,
                 entry_time
             FROM vehicles
@@ -2235,6 +2430,7 @@ class ParkingApp:
                 text=(
                     f"Vehicle: {row['vehicle_number']}    "
                     f"Owner: {row['owner_name']}    "
+                    f"Phone: {row['owner_phone'] or '-'}    "
                     f"Type: {row['vehicle_type']}    "
                     f"Entry: {row['entry_time']}"
                 )
@@ -2340,6 +2536,7 @@ class ParkingApp:
             )
             return
 
+        self.begin_page("notifications")
         self.clear_content()
 
         content = self.create_scrollable_page(
@@ -2453,6 +2650,7 @@ class ParkingApp:
             )
             return
 
+        self.begin_page("user_management")
         self.clear_content()
 
         content = self.create_scrollable_page(
@@ -2576,13 +2774,14 @@ class ParkingApp:
                 cursor.execute(
                     """
                     INSERT INTO users
-                    (username, password, role)
-                    VALUES (?, ?, ?)
+                    (username, password, role, display_name)
+                    VALUES (?, ?, ?, ?)
                     """,
                     (
                         username,
                         hash_password(password),
-                        selected_role
+                        selected_role,
+                        username
                     )
                 )
                 conn.commit()
@@ -2627,7 +2826,7 @@ class ParkingApp:
             style="CardTitle.TLabel"
         ).pack(side="left")
 
-        columns = ("id", "username", "role")
+        columns = ("id", "username", "display_name", "role")
 
         tree = ttk.Treeview(
             users_card,
@@ -2638,10 +2837,12 @@ class ParkingApp:
 
         tree.heading("id", text="ID")
         tree.heading("username", text="Username")
+        tree.heading("display_name", text="Display Name")
         tree.heading("role", text="Role")
 
         tree.column("id", width=70, anchor="center")
         tree.column("username", width=200, anchor="center")
+        tree.column("display_name", width=200, anchor="center")
         tree.column("role", width=150, anchor="center")
 
         tree.pack(fill="x")
@@ -2651,7 +2852,7 @@ class ParkingApp:
 
         cursor.execute(
             """
-            SELECT id, username, role
+            SELECT id, username, display_name, role
             FROM users
             ORDER BY id
             """
@@ -2667,6 +2868,7 @@ class ParkingApp:
                 values=(
                     user["id"],
                     user["username"],
+                    user["display_name"] or user["username"],
                     user["role"]
                 )
             )
@@ -2748,6 +2950,18 @@ class ParkingApp:
 
             self.show_reset_password(values[1])
 
+        def edit_selected():
+            values = selected_user()
+            if values is None:
+                return
+            self.show_profile(int(values[0]))
+
+        self.make_button(
+            buttons,
+            "Edit Display Name",
+            edit_selected
+        ).pack(side="left", padx=(0, 8))
+
         self.make_button(
             buttons,
             "Reset Password",
@@ -2761,6 +2975,114 @@ class ParkingApp:
             "Danger.TButton"
         ).pack(side="left")
 
+    def show_profile(self, user_id=None):
+        if self.role not in ("Admin", "Staff", "User"):
+            messagebox.showerror("Access Denied", "Please login to edit a profile.")
+            return
+        if user_id is not None and self.role != "Admin":
+            messagebox.showerror(
+                "Access Denied",
+                "Only Admin can edit another account's profile."
+            )
+            return
+
+        conn = get_connection()
+        cursor = conn.cursor()
+        if user_id is None:
+            cursor.execute(
+                "SELECT id, username, role, display_name FROM users WHERE username=?",
+                (self.username,)
+            )
+        else:
+            cursor.execute(
+                "SELECT id, username, role, display_name FROM users WHERE id=?",
+                (user_id,)
+            )
+        account = cursor.fetchone()
+        conn.close()
+        if account is None:
+            messagebox.showerror("Account Not Found", "That account no longer exists.")
+            return
+
+        self.begin_page("profile", user_id)
+        self.clear_content()
+        content = self.create_scrollable_page(self.content_area)
+        self.add_header(
+            content,
+            "Edit Profile",
+            f"Update the display name for {account['username']}. Passwords are not changed here."
+        )
+
+        card = self.make_card(content)
+        ttk.Label(card, text="Account Details", style="CardTitle.TLabel").pack(anchor="w")
+        ttk.Label(
+            card,
+            text=f"Username: {account['username']}    Role: {account['role']}",
+            style="Muted.TLabel"
+        ).pack(anchor="w", pady=(5, 16))
+
+        tk.Label(
+            card,
+            text="Display Name",
+            bg=CARD_BG,
+            fg=TEXT,
+            font=("Segoe UI", 10, "bold")
+        ).pack(anchor="w")
+        display_name_entry = ttk.Entry(card)
+        display_name_entry.pack(fill="x", pady=(5, 16))
+        display_name_entry.insert(
+            0,
+            account["display_name"] or account["username"]
+        )
+
+        def save_profile():
+            display_name = display_name_entry.get().strip()
+            valid, error = validate_display_name(display_name)
+            if not valid:
+                messagebox.showerror("Invalid Display Name", error)
+                return
+            if not messagebox.askyesno(
+                "Confirm Profile Update",
+                f"Change {account['username']}'s display name to "
+                f"'{display_name}'?\n\nThe password and parking records will not be changed."
+            ):
+                return
+
+            conn = get_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                "UPDATE users SET display_name=? WHERE id=?",
+                (display_name, account["id"])
+            )
+            changed = cursor.rowcount
+            conn.commit()
+            conn.close()
+            if changed != 1:
+                messagebox.showerror(
+                    "Update Failed",
+                    "The account could not be updated. Please refresh and try again."
+                )
+                return
+
+            if account["username"] == self.username:
+                self.display_name = display_name
+                self.current_user_label.configure(
+                    text=f"{self.display_name}  •  {self.role}"
+                )
+            create_audit_log(
+                self.username,
+                f"Changed display name for '{account['username']}'"
+            )
+            messagebox.showinfo("Profile Updated", "Display name updated successfully.")
+            self.go_back()
+
+        self.make_button(
+            card,
+            "Save Changes",
+            save_profile,
+            "Primary.TButton"
+        ).pack(anchor="w")
+
     # --------------------------------------------------------
     # RESET PASSWORD
     # --------------------------------------------------------
@@ -2773,6 +3095,7 @@ class ParkingApp:
             )
             return
 
+        self.begin_page("reset_password", selected_username)
         self.clear_content()
 
         content = self.create_scrollable_page(
@@ -2911,7 +3234,7 @@ class ParkingApp:
                 "Password reset successfully."
             )
 
-            self.show_user_management()
+            self.go_back()
 
         self.make_button(
             card,
@@ -2932,6 +3255,7 @@ class ParkingApp:
             )
             return
 
+        self.begin_page("audit_logs")
         self.clear_content()
 
         content = self.create_scrollable_page(
@@ -2967,43 +3291,22 @@ class ParkingApp:
         selected_filter = {"name": "All"}
 
         def filter_range(name):
-            now = datetime.now()
-            today = now.replace(hour=0, minute=0, second=0, microsecond=0)
-
-            if name == "Today":
-                return today, today + timedelta(days=1)
-            if name == "Yesterday":
-                return today - timedelta(days=1), today
-            if name == "This Week":
-                start = today - timedelta(days=today.weekday())
-                return start, start + timedelta(days=7)
-            if name == "This Month":
-                if today.month == 12:
-                    end = today.replace(
-                        year=today.year + 1,
-                        month=1,
-                        day=1
-                    )
-                else:
-                    end = today.replace(
-                        month=today.month + 1,
-                        day=1
-                    )
-                return today.replace(day=1), end
-            if name == "This Year":
-                return (
-                    today.replace(month=1, day=1),
-                    today.replace(
-                        year=today.year + 1,
-                        month=1,
-                        day=1
-                    )
-                )
-            return None, None
+            return audit_date_range(
+                name,
+                from_date=from_entry.get().strip() if name == "Custom Range" else None,
+                to_date=to_entry.get().strip() if name == "Custom Range" else None
+            )
 
         def load_logs():
             name = selected_filter["name"]
-            start_date, end_date = filter_range(name)
+            try:
+                start_date, end_date = filter_range(name)
+            except ValueError:
+                messagebox.showerror(
+                    "Invalid Date Range",
+                    "Use YYYY-MM-DD dates and ensure the To date is not earlier than the From date."
+                )
+                return
 
             for item in tree.get_children():
                 tree.delete(item)
@@ -3051,7 +3354,12 @@ class ParkingApp:
                 )
 
             period_label.config(
-                text=f"Showing: {name}  •  {len(logs)} record(s)"
+                text=(
+                    f"Showing: {from_entry.get().strip()} to "
+                    f"{to_entry.get().strip()}  •  {len(logs)} record(s)"
+                    if name == "Custom Range"
+                    else f"Showing: {name}  •  {len(logs)} record(s)"
+                )
             )
 
         def set_filter(name):
@@ -3111,72 +3419,7 @@ class ParkingApp:
         to_entry.insert(0, datetime.now().strftime("%Y-%m-%d"))
 
         def custom_view():
-            try:
-                start = datetime.strptime(
-                    from_entry.get().strip(),
-                    "%Y-%m-%d"
-                )
-                end_day = datetime.strptime(
-                    to_entry.get().strip(),
-                    "%Y-%m-%d"
-                )
-            except ValueError:
-                messagebox.showerror(
-                    "Invalid Date",
-                    "Use the date format YYYY-MM-DD."
-                )
-                return
-
-            if end_day < start:
-                messagebox.showerror(
-                    "Invalid Range",
-                    "The To date cannot be earlier than the From date."
-                )
-                return
-
-            end = end_day + timedelta(days=1)
-
-            for item in tree.get_children():
-                tree.delete(item)
-
-            conn = get_connection()
-            cursor = conn.cursor()
-            cursor.execute(
-                """
-                SELECT id, user_id, username, role, action, timestamp
-                FROM audit_logs
-                WHERE timestamp >= ?
-                  AND timestamp < ?
-                ORDER BY id DESC
-                """,
-                (
-                    start.strftime("%Y-%m-%d 00:00:00"),
-                    end.strftime("%Y-%m-%d 00:00:00")
-                )
-            )
-            logs = cursor.fetchall()
-            conn.close()
-
-            for log in logs:
-                tree.insert(
-                    "",
-                    "end",
-                    values=(
-                        log["user_id"] if log["user_id"] is not None else "-",
-                        log["username"],
-                        log["role"] if log["role"] else "-",
-                        log["action"],
-                        log["timestamp"]
-                    )
-                )
-
-            period_label.config(
-                text=(
-                    f"Showing: {start.strftime('%Y-%m-%d')} to "
-                    f"{end_day.strftime('%Y-%m-%d')}  •  "
-                    f"{len(logs)} record(s)"
-                )
-            )
+            set_filter("Custom Range")
 
         self.make_button(
             custom_frame,
@@ -3276,16 +3519,18 @@ class ParkingApp:
             font=("Segoe UI", 10, "bold")
         ).pack(side="left")
 
-        delete_var = tk.StringVar(value="Last 7 Days")
+        delete_var = tk.StringVar(value="Today")
         delete_combo = ttk.Combobox(
             delete_controls,
             textvariable=delete_var,
             values=[
-                "Last 7 Days",
-                "Last 30 Days",
-                "Last 90 Days",
+                "Today",
+                "Yesterday",
+                "This Week",
+                "This Month",
+                "This Year",
                 "Custom Range",
-                "All Audit Logs"
+                "All"
             ],
             state="readonly",
             width=20
@@ -3293,49 +3538,28 @@ class ParkingApp:
         delete_combo.pack(side="left", padx=(8, 10))
 
         def get_delete_range():
-            now = datetime.now()
             choice = delete_var.get()
-
-            if choice == "Last 7 Days":
-                return now - timedelta(days=7), now, "the last 7 days"
-
-            if choice == "Last 30 Days":
-                return now - timedelta(days=30), now, "the last 30 days"
-
-            if choice == "Last 90 Days":
-                return now - timedelta(days=90), now, "the last 90 days"
-
-            if choice == "All Audit Logs":
-                return None, None, "all audit logs"
-
             try:
-                start = datetime.strptime(
-                    from_entry.get().strip(),
-                    "%Y-%m-%d"
-                )
-                end_day = datetime.strptime(
-                    to_entry.get().strip(),
-                    "%Y-%m-%d"
-                )
+                start, end = filter_range(choice)
             except ValueError:
                 messagebox.showerror(
                     "Invalid Date",
-                    "Use the date format YYYY-MM-DD for the custom range."
+                    "Use YYYY-MM-DD dates and ensure the To date is not earlier than the From date."
                 )
                 return "ERROR", "ERROR", ""
 
-            if end_day < start:
-                messagebox.showerror(
-                    "Invalid Range",
-                    "The To date cannot be earlier than the From date."
+            if start is None:
+                description = "all audit logs"
+            elif choice == "Custom Range":
+                description = (
+                    f"records from {start.strftime('%Y-%m-%d')} "
+                    f"to {(end - timedelta(days=1)).strftime('%Y-%m-%d')}"
                 )
-                return "ERROR", "ERROR", ""
-
-            end = end_day + timedelta(days=1)
-            description = (
-                f"records from {start.strftime('%Y-%m-%d')} "
-                f"to {end_day.strftime('%Y-%m-%d')}"
-            )
+            else:
+                description = (
+                    f"{choice} ({start.strftime('%Y-%m-%d')} through "
+                    f"{(end - timedelta(days=1)).strftime('%Y-%m-%d')})"
+                )
             return start, end, description
 
         def delete_audit_logs():
@@ -3361,24 +3585,8 @@ class ParkingApp:
             cursor = conn.cursor()
 
             if start_date is None:
-                cursor.execute("SELECT COUNT(*) AS total FROM audit_logs")
-                deleted_count = cursor.fetchone()["total"]
                 cursor.execute("DELETE FROM audit_logs")
             else:
-                cursor.execute(
-                    """
-                    SELECT COUNT(*) AS total
-                    FROM audit_logs
-                    WHERE timestamp >= ?
-                      AND timestamp < ?
-                    """,
-                    (
-                        start_date.strftime("%Y-%m-%d %H:%M:%S"),
-                        end_date.strftime("%Y-%m-%d %H:%M:%S")
-                    )
-                )
-                deleted_count = cursor.fetchone()["total"]
-
                 cursor.execute(
                     """
                     DELETE FROM audit_logs
@@ -3390,17 +3598,11 @@ class ParkingApp:
                         end_date.strftime("%Y-%m-%d %H:%M:%S")
                     )
                 )
+            deleted_count = cursor.rowcount
 
             conn.commit()
             conn.close()
 
-            # SQLite may keep unused pages after DELETE. VACUUM reclaims
-            # that space so the database file can actually become smaller.
-            conn = get_connection()
-            conn.execute("VACUUM")
-            conn.close()
-
-            # Record the administrative deletion event after the cleanup.
             create_audit_log(
                 self.username,
                 f"Deleted {deleted_count} audit log(s): {description}"
